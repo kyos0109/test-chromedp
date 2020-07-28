@@ -18,8 +18,20 @@ TestTargets:
   - URL: 'www.google.com'
     SkipHTTPs: true
   - URL: 'www.yahoo.com'
-    SkipHTTPs: true
+    // SkipHTTPs: false
     SkipSubPath: true
   - URL: 'www.hotmail.com'
     Disable: true
 ```
+# Run Time
+```
+www.google.com
+test -> http://www.google.com/
+test -> http://www.google.com/AA
+test -> http://www.google.com/BB
+
+www.yahoo.com
+test -> https://www.yahoo.com
+
+www.hotmail.com
+test -> not run
