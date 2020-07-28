@@ -24,10 +24,8 @@ import (
 var (
 	subPathCount  int
 	help          bool
-	remote        bool
 	headless      bool
 	debug         bool
-	webSocketURL  string
 	configPath    string
 	WarningLogger *log.Logger
 	LatencyLogger *log.Logger
@@ -48,7 +46,9 @@ type BodyWaitDomLoad struct {
 }
 
 type TestConfig struct {
-	SubPath []string `yaml:"SubPath"`
+	SubPath    []string `yaml:"SubPath"`
+	Remote     bool     `yaml:"Remote,omitempty"`
+	ChromedpWS string   `yaml:"ChromedpWS,omitempty"`
 }
 
 type Target struct {
@@ -86,9 +86,7 @@ func init() {
 
 	flag.BoolVar(&help, "h", false, "This help")
 	flag.BoolVar(&debug, "debug", false, "Enable debug response")
-	flag.BoolVar(&remote, "r", false, "Enable remote Chrome debugger")
-	flag.BoolVar(&headless, "less", true, "Enable Chrome headless")
-	flag.StringVar(&webSocketURL, "u", "ws://127.0.0.1:9222/json", "Remote Chrome debugger `URL`")
+	flag.BoolVar(&headless, "less", true, "Enable Chrome headless. (Only Local)")
 	flag.StringVar(&configPath, "c", "config.yaml", "YAML config `path`")
 	flag.Parse()
 
@@ -188,10 +186,12 @@ func run(yamlConig *YAMLConfig) {
 
 	fmt.Println("===========> Happy Start Run Test <===========")
 
-	switch remote && len(webSocketURL) > 3 {
+	webSocketURL := yamlConig.TestConfig.ChromedpWS
+
+	switch yamlConig.TestConfig.Remote && len(webSocketURL) > 3 {
 	case true:
-		NoticeLogger.Println("Use remote Chrome -> ", webSocketURL)
-		ctx, cancel = runChromedpRemote()
+		NoticeLogger.Println("Use remote Chrome ->", webSocketURL)
+		ctx, cancel = runChromedpRemote(&webSocketURL)
 		defer cancel()
 	case false:
 		NoticeLogger.Println("Use local Chrome")
@@ -242,8 +242,8 @@ func runChromedpLocal() (context.Context, context.CancelFunc) {
 	return chromedp.NewExecAllocator(context.Background(), opts...)
 }
 
-func runChromedpRemote() (context.Context, context.CancelFunc) {
-	return chromedp.NewRemoteAllocator(context.Background(), webSocketURL)
+func runChromedpRemote(ws *string) (context.Context, context.CancelFunc) {
+	return chromedp.NewRemoteAllocator(context.Background(), *ws)
 }
 
 func chromedpMain(URL *string, allocCtx *context.Context, DOM *[]byte) {
@@ -329,7 +329,7 @@ func networkEventResponseReceived(r *network.EventResponseReceived, URL *string,
 			ErrorLogger.Printf(
 				"site: %v, status: %d, URL: %s, ServerIP: %s, Latency: %vms",
 				*URL, res.Status, res.URL, res.RemoteIPAddress, res.Timing.ReceiveHeadersEnd)
-				cancel()
+			cancel()
 			break
 		case (res.Status < 200 || res.Status > 399):
 			WarningLogger.Printf(
