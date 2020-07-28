@@ -8,6 +8,8 @@ config.yaml
 HTML:
   BodyWaitDomLoad: '{JSPath}'
 TestConfig:
+  Remote: true
+  ChromedpWS: 'ws://127.0.0.1:9222/devtools/page/XXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
   SubPath:
     - '/'
     - '/AA'
