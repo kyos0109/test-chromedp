@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 
 	"github.com/cheggaaa/pb/v3"
@@ -38,16 +39,16 @@ var (
 
 type YAMLConfig struct {
 	HTML        BodyWaitDomLoad `yaml:"HTML"`
-	TestConfig  SubPath         `yaml:"TestConfig"`
+	TestConfig  TestConfig      `yaml:"TestConfig"`
 	TestTargets []Target        `yaml:"TestTargets"`
-}
-
-type SubPath struct {
-	SubPath []string `yaml:"SubPath"`
 }
 
 type BodyWaitDomLoad struct {
 	BodyWaitDomLoad string `yaml:"BodyWaitDomLoad"`
+}
+
+type TestConfig struct {
+	SubPath []string `yaml:"SubPath"`
 }
 
 type Target struct {
@@ -224,18 +225,18 @@ func run(yamlConig *YAMLConfig) {
 }
 
 func runChromedpLocal() (context.Context, context.CancelFunc) {
-	// dir, err := ioutil.TempDir("", "chromedp-wow")
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// defer os.RemoveAll(dir)
+	dir, err := ioutil.TempDir("", "chromedp-wow")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(dir)
 
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.DisableGPU,
 		chromedp.NoDefaultBrowserCheck,
 		chromedp.Flag("headless", headless),
 		chromedp.Flag("ignore-certificate-errors", false),
-		// chromedp.UserDataDir(dir),
+		chromedp.UserDataDir(dir),
 	)
 
 	return chromedp.NewExecAllocator(context.Background(), opts...)
@@ -246,6 +247,8 @@ func runChromedpRemote() (context.Context, context.CancelFunc) {
 }
 
 func chromedpMain(URL *string, allocCtx *context.Context, DOM *[]byte) {
+	var StartTime time.Time
+
 	InfoLogger.Println("Run -->", *URL)
 
 	ctx, cancel := chromedp.NewContext(*allocCtx)
@@ -257,13 +260,26 @@ func chromedpMain(URL *string, allocCtx *context.Context, DOM *[]byte) {
 	chromedp.ListenTarget(ctx, func(ev interface{}) {
 		switch ev.(type) {
 		case *network.EventResponseReceived:
-			go networkEventResponseReceived(ev.(*network.EventResponseReceived), URL)
+			go networkEventResponseReceived(ev.(*network.EventResponseReceived), URL, cancel)
 			break
 		case *network.EventLoadingFailed:
 			go func(r *network.EventLoadingFailed) {
 				ErrorLogger.Println(*URL, r.RequestID, r.ErrorText)
 				cancel()
 			}(ev.(*network.EventLoadingFailed))
+			break
+		case *network.EventRequestWillBeSent:
+			go func(r *network.EventRequestWillBeSent) {
+				if r.Type == "Document" {
+					StartTime = r.Timestamp.Time()
+				}
+			}(ev.(*network.EventRequestWillBeSent))
+			break
+		case *page.EventDomContentEventFired:
+			go pageEventDomContentEventFired(ev.(*page.EventDomContentEventFired), URL, &StartTime)
+			break
+		case *page.EventLoadEventFired:
+			go pageEventLoadEventFired(ev.(*page.EventLoadEventFired), URL, &StartTime)
 			break
 		}
 	})
@@ -273,32 +289,56 @@ func chromedpMain(URL *string, allocCtx *context.Context, DOM *[]byte) {
 
 	err := chromedp.Run(ctx,
 		network.Enable(),
+		network.ClearBrowserCache(),
+		page.Enable(),
 		chromedp.Navigate(*URL),
 		chromedp.WaitVisible(clearDOM, chromedp.ByQuery),
 		chromedp.Sleep(1*time.Second),
 	)
 	if err != nil {
-		ErrorLogger.Println(err)
+		ErrorLogger.Println(*URL, err)
 	}
-	cancel()
-	ctx.Done()
 }
 
-func networkEventResponseReceived(r *network.EventResponseReceived, URL *string) {
+func pageEventDomContentEventFired(e *page.EventDomContentEventFired, URL *string, startTime *time.Time) {
+	domDiffTime := e.Timestamp.Time().Sub(*startTime)
+	InfoLogger.Printf("└→ DomContent: %v", domDiffTime)
+
+	if domDiffTime > (800 * time.Millisecond) {
+		WarningLogger.Printf("URL: %s, DomContent: %v", *URL, domDiffTime)
+	}
+}
+
+func pageEventLoadEventFired(e *page.EventLoadEventFired, URL *string, startTime *time.Time) {
+	loadDiffTime := e.Timestamp.Time().Sub(*startTime)
+	InfoLogger.Printf("└→ Load: %v", loadDiffTime)
+
+	if loadDiffTime > (2 * time.Second) {
+		WarningLogger.Printf("URL: %s, Load: %v", *URL, loadDiffTime)
+	}
+}
+
+func networkEventResponseReceived(r *network.EventResponseReceived, URL *string, cancel context.CancelFunc) {
 	res := r.Response
 	if debug {
 		DebugLogger.Println(res)
 	}
 	if res.ConnectionID != 0 && res.RemoteIPAddress != "" {
 		switch true {
+		case (res.Status > 499):
+			ErrorLogger.Printf(
+				"site: %v, status: %d, URL: %s, ServerIP: %s, Latency: %vms",
+				*URL, res.Status, res.URL, res.RemoteIPAddress, res.Timing.ReceiveHeadersEnd)
+				cancel()
+			break
 		case (res.Status < 200 || res.Status > 399):
 			WarningLogger.Printf(
-				"site: %v, status: %d, URL: %s, ServerIP: %s, Latency: %f ms",
+				"site: %v, status: %d, URL: %s, ServerIP: %s, Latency: %vms",
 				*URL, res.Status, res.URL, res.RemoteIPAddress, res.Timing.ReceiveHeadersEnd)
 			break
 		case (res.Timing.ReceiveHeadersEnd > 500):
 			LatencyLogger.Printf(
-				"site: %v, status: %d, URL: %s, ServerIP: %s, Latency: %f ms",
+				"site: %v, status: %d, URL: %s, ServerIP: %s, Latency: %vms",
 				*URL, res.Status, res.URL, res.RemoteIPAddress, res.Timing.ReceiveHeadersEnd)
 			break
 		}
